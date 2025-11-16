@@ -1,21 +1,19 @@
 import { createClient } from "@supabase/supabase-js";
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
-const supabaseKey =
-  (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined) ||
-  (import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined);
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+const supabaseAnonKey = import.meta.env
+  .VITE_SUPABASE_ANON_KEY as string | undefined;
 
 console.log("Supabase URL:", supabaseUrl);
-console.log("Supabase key present:", !!supabaseKey);
+console.log("Supabase anon key present:", !!supabaseAnonKey);
 
 if (!supabaseUrl) {
-  throw new Error("VITE_SUPABASE_URL is missing in .env");
+  throw new Error("❌ VITE_SUPABASE_URL is missing");
 }
 
-if (!supabaseKey) {
-  throw new Error(
-    "Supabase key is missing. Set VITE_SUPABASE_ANON_KEY or VITE_SUPABASE_PUBLISHABLE_KEY in .env"
-  );
+if (!supabaseAnonKey) {
+  throw new Error("❌ VITE_SUPABASE_ANON_KEY is missing");
 }
 
-export const supabase = createClient(supabaseUrl, supabaseKey);
+export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
