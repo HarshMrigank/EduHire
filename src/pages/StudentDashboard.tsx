@@ -31,16 +31,23 @@ export default function StudentDashboard() {
   }, [user]);
 
   useEffect(() => {
-    if (searchTerm) {
-      const filtered = tutors.filter(tutor =>
-        tutor.subjects.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        tutor.profiles.name.toLowerCase().includes(searchTerm.toLowerCase())
-      );
-      setFilteredTutors(filtered);
-    } else {
+    const term = searchTerm.trim().toLowerCase();
+
+    if (!term) {
       setFilteredTutors(tutors);
+      return;
     }
+
+    const filtered = tutors.filter((tutor) => {
+      const subjects = (tutor.subjects ?? "").toLowerCase();
+      const name = (tutor.profiles?.name ?? "").toLowerCase();
+      return subjects.includes(term) || name.includes(term);
+    });
+
+    setFilteredTutors(filtered);
   }, [searchTerm, tutors]);
+;
+
 
   const fetchTutors = async () => {
     const { data } = await supabase
