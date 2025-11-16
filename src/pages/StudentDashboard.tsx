@@ -1,8 +1,7 @@
-// src/pages/StudentDashboard.tsx
 import { useState, useEffect } from "react";
 import { Navbar } from "@/components/Navbar";
 import { TutorCard } from "@/components/TutorCard";
-import { supabase } from "@/integrations/client"; // ✅ important path
+import { supabase } from "@/integrations/client";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -38,16 +37,14 @@ export default function StudentDashboard() {
   const { user } = useAuth();
   const { toast } = useToast();
 
-  // load data when user is ready
   useEffect(() => {
     if (!user) return;
     fetchTutors();
     fetchBookings();
   }, [user]);
 
-  // ---------- TUTORS FETCH (no broken FK join) ----------
+  // ---- TUTORS ----
   const fetchTutors = async () => {
-    // 1) get tutor_profiles
     const { data: tutorData, error: tutorError } = await supabase
       .from("tutor_profiles")
       .select("id, user_id, bio, subjects, hourly_rate, availability");
@@ -70,7 +67,6 @@ export default function StudentDashboard() {
       return;
     }
 
-    // 2) get names from profiles for those user_ids
     const userIds = tutorData.map((t) => t.user_id);
 
     const { data: profileData, error: profileError } = await supabase
@@ -80,7 +76,6 @@ export default function StudentDashboard() {
 
     if (profileError) {
       console.error("Error fetching profiles:", profileError);
-      // we still show tutors, just with "Unknown" name
     }
 
     const profileMap: Record<string, string> = {};
@@ -88,48 +83,100 @@ export default function StudentDashboard() {
       profileMap[p.id] = p.name;
     });
 
-    // 3) merge name into tutor objects
     const tutorsWithNames = tutorData.map((t: any) => ({
       ...t,
       name: profileMap[t.user_id] || "Unknown",
     }));
 
-    console.log("Tutors with names:", tutorsWithNames);
-
     setTutors(tutorsWithNames);
     setFilteredTutors(tutorsWithNames);
   };
 
-  // ---------- BOOKINGS FETCH ----------
+  // ---- BOOKINGS (for student) ----
   const fetchBookings = async () => {
     if (!user) return;
 
+    // 1) get bookings for this student
     const { data, error } = await supabase
       .from("bookings")
-      .select(`
-        *,
-        tutor:tutor_id (
-          id,
-          email
-        ),
-        profiles!bookings_tutor_id_fkey (name),
-        ratings (
-          id,
-          rating,
-          comment
-        )
-      `)
+      .select("id, tutor_id, start_time, end_time, status, created_at")
       .eq("student_id", user.id)
       .order("start_time", { ascending: false });
 
     if (error) {
-      console.error("Error fetching bookings:", error);
+      console.error("Error fetching student bookings:", error);
+      toast({
+        title: "Error loading bookings",
+        description: error.message,
+        variant: "destructive",
+      });
+      setBookings([]);
+      return;
     }
 
-    setBookings(data || []);
+    if (!data || data.length === 0) {
+      setBookings([]);
+      return;
+    }
+
+    const tutorIds = Array.from(
+      new Set(data.map((b: any) => b.tutor_id).filter(Boolean))
+    );
+
+    let tutorProfileMap: Record<
+      string,
+      { name: string | null; email: string | null; hourly_rate: number | null }
+    > = {};
+
+    if (tutorIds.length > 0) {
+      // get tutor basic info from profiles
+      const { data: profilesData, error: profilesError } = await supabase
+        .from("profiles")
+        .select("id, name, email")
+        .in("id", tutorIds);
+
+      if (profilesError) {
+        console.error("Error fetching tutor profiles:", profilesError);
+      }
+
+      const { data: tutorDetailsData, error: tutorDetailsError } =
+        await supabase
+          .from("tutor_profiles")
+          .select("user_id, hourly_rate")
+          .in("user_id", tutorIds);
+
+      if (tutorDetailsError) {
+        console.error("Error fetching tutor hourly rates:", tutorDetailsError);
+      }
+
+      const profileMap: Record<string, { name: string | null; email: string | null }> = {};
+      (profilesData || []).forEach((p: any) => {
+        profileMap[p.id] = { name: p.name, email: p.email };
+      });
+
+      const hourlyMap: Record<string, number | null> = {};
+      (tutorDetailsData || []).forEach((t: any) => {
+        hourlyMap[t.user_id] = t.hourly_rate ?? null;
+      });
+
+      tutorIds.forEach((id) => {
+        tutorProfileMap[id] = {
+          name: profileMap[id]?.name ?? null,
+          email: profileMap[id]?.email ?? null,
+          hourly_rate: hourlyMap[id] ?? null,
+        };
+      });
+    }
+
+    const bookingsWithTutorInfo = data.map((b: any) => ({
+      ...b,
+      tutorInfo: tutorProfileMap[b.tutor_id] || null,
+    }));
+
+    setBookings(bookingsWithTutorInfo);
   };
 
-  // ---------- SEARCH FILTER ----------
+  // ---- SEARCH ----
   useEffect(() => {
     const term = searchTerm.trim().toLowerCase();
 
@@ -147,7 +194,7 @@ export default function StudentDashboard() {
     setFilteredTutors(filtered);
   }, [searchTerm, tutors]);
 
-  // ---------- RATING HANDLER ----------
+  // ---- RATING ----
   const handleSubmitRating = async () => {
     if (!selectedBooking) return;
 
@@ -172,7 +219,7 @@ export default function StudentDashboard() {
       setComment("");
       setRating(5);
       fetchBookings();
-      fetchTutors(); // refresh ratings/averages if needed
+      fetchTutors(); // refresh any averages, if you show later
     }
   };
 
@@ -189,12 +236,19 @@ export default function StudentDashboard() {
     return <Badge variant={variants[status] || "default"}>{status}</Badge>;
   };
 
-  // ---------- UI ----------
   return (
     <div className="min-h-screen bg-background">
       <Navbar />
       <div className="container mx-auto px-4 py-8">
-        <Tabs defaultValue="tutors" className="space-y-6">
+        <Tabs
+          defaultValue="tutors"
+          className="space-y-6"
+          onValueChange={(val) => {
+            if (val === "bookings") {
+              fetchBookings();
+            }
+          }}
+        >
           <TabsList className="grid w-full grid-cols-2 max-w-md">
             <TabsTrigger value="tutors">Find Tutors</TabsTrigger>
             <TabsTrigger value="bookings">My Bookings</TabsTrigger>
@@ -240,105 +294,156 @@ export default function StudentDashboard() {
 
           {/* BOOKINGS TAB */}
           <TabsContent value="bookings" className="space-y-4">
-            {bookings.map((booking) => (
-              <Card key={booking.id}>
-                <CardHeader>
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <CardTitle className="text-foreground">
-                        {booking.profiles?.name || "Tutor"}
-                      </CardTitle>
-                      <CardDescription>
-                        <Calendar className="inline h-4 w-4 mr-1" />
-                        {new Date(booking.start_time).toLocaleString()}
-                      </CardDescription>
-                    </div>
-                    {getStatusBadge(booking.status)}
-                  </div>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="text-sm text-muted-foreground">
-                    Duration:{" "}
-                    {new Date(booking.start_time).toLocaleTimeString()} -{" "}
-                    {new Date(booking.end_time).toLocaleTimeString()}
-                  </div>
+            {bookings.map((booking) => {
+              const tutorName = booking.tutorInfo?.name || "Tutor";
+              const tutorEmail = booking.tutorInfo?.email || null;
+              const hourly = booking.tutorInfo?.hourly_rate || null;
 
-                  {booking.status === "COMPLETED" &&
-                    !booking.ratings?.length && (
-                      <Dialog>
-                        <DialogTrigger asChild>
-                          <Button
-                            onClick={() => setSelectedBooking(booking)}
-                            variant="outline"
-                            size="sm"
-                          >
-                            <Star className="h-4 w-4 mr-2" />
-                            Rate Session
-                          </Button>
-                        </DialogTrigger>
-                        <DialogContent>
-                          <DialogHeader>
-                            <DialogTitle>Rate Your Session</DialogTitle>
-                          </DialogHeader>
-                          <div className="space-y-4">
-                            <div className="space-y-2">
-                              <Label>Rating (1-5)</Label>
-                              <div className="flex gap-2">
-                                {[1, 2, 3, 4, 5].map((value) => (
-                                  <Button
-                                    key={value}
-                                    type="button"
-                                    variant={
-                                      rating === value ? "default" : "outline"
-                                    }
-                                    size="sm"
-                                    onClick={() => setRating(value)}
-                                  >
-                                    {value}
-                                  </Button>
-                                ))}
-                              </div>
-                            </div>
-                            <div className="space-y-2">
-                              <Label htmlFor="comment">Comment</Label>
-                              <Textarea
-                                id="comment"
-                                value={comment}
-                                onChange={(e) =>
-                                  setComment(e.target.value)
-                                }
-                                placeholder="Share your experience..."
-                              />
-                            </div>
-                            <Button
-                              onClick={handleSubmitRating}
-                              className="w-full"
-                            >
-                              Submit Rating
-                            </Button>
+              return (
+                <Card key={booking.id}>
+                  <CardHeader>
+                    <div className="flex items-start justify-between">
+                      <div>
+                        <CardTitle className="text-foreground">
+                          {tutorName}
+                        </CardTitle>
+                        <CardDescription className="space-y-1">
+                          <div>
+                            <Calendar className="inline h-4 w-4 mr-1" />
+                            {new Date(booking.start_time).toLocaleString()}
                           </div>
-                        </DialogContent>
-                      </Dialog>
+                          {tutorEmail && (
+                            <div className="text-xs text-muted-foreground">
+                              Tutor Email: {tutorEmail}
+                            </div>
+                          )}
+                          {hourly && (
+                            <div className="text-xs text-muted-foreground">
+                              Hourly Rate: ₹{hourly} / hour
+                            </div>
+                          )}
+                        </CardDescription>
+                      </div>
+                      {getStatusBadge(booking.status)}
+                    </div>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="text-sm text-muted-foreground">
+                      Duration:{" "}
+                      {new Date(booking.start_time).toLocaleTimeString()} –{" "}
+                      {new Date(booking.end_time).toLocaleTimeString()}
+                    </div>
+
+                    {/* Confirmation / instructions when ACCEPTED */}
+                    {booking.status === "ACCEPTED" && (
+                      <div className="p-4 rounded-lg bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 text-sm space-y-1">
+                        <div className="font-semibold text-emerald-700 dark:text-emerald-300">
+                          ✅ Booking Confirmed
+                        </div>
+                        <div>
+                          Your session with <strong>{tutorName}</strong> has
+                          been accepted.
+                        </div>
+                        {tutorEmail && (
+                          <div>
+                            Contact your tutor at{" "}
+                            <span className="font-mono">{tutorEmail}</span> to
+                            finalise meeting link (Zoom/Meet) and payment.
+                          </div>
+                        )}
+                        {hourly && (
+                          <div>
+                            Agreed hourly rate: <strong>₹{hourly}</strong> per
+                            hour. You can pay via UPI / bank transfer as
+                            discussed with the tutor.
+                          </div>
+                        )}
+                        <div className="text-xs text-muted-foreground">
+                          * Demo class details and exact schedule can be
+                          discussed directly over email or chat.
+                        </div>
+                      </div>
                     )}
 
-                  {booking.ratings?.length > 0 && (
-                    <div className="p-4 bg-muted rounded-lg">
-                      <div className="flex items-center gap-2 mb-2">
-                        <Star className="h-4 w-4 fill-yellow-400 text-yellow-400" />
-                        <span className="font-semibold">
-                          Your Rating: {booking.ratings[0].rating}/5
-                        </span>
-                      </div>
-                      {booking.ratings[0].comment && (
-                        <p className="text-sm text-muted-foreground">
-                          {booking.ratings[0].comment}
-                        </p>
+                    {/* Rating UI when COMPLETED and no rating yet */}
+                    {booking.status === "COMPLETED" &&
+                      !booking.ratings?.length && (
+                        <Dialog>
+                          <DialogTrigger asChild>
+                            <Button
+                              onClick={() => setSelectedBooking(booking)}
+                              variant="outline"
+                              size="sm"
+                            >
+                              <Star className="h-4 w-4 mr-2" />
+                              Rate Session
+                            </Button>
+                          </DialogTrigger>
+                          <DialogContent>
+                            <DialogHeader>
+                              <DialogTitle>Rate Your Session</DialogTitle>
+                            </DialogHeader>
+                            <div className="space-y-4">
+                              <div className="space-y-2">
+                                <Label>Rating (1-5)</Label>
+                                <div className="flex gap-2">
+                                  {[1, 2, 3, 4, 5].map((value) => (
+                                    <Button
+                                      key={value}
+                                      type="button"
+                                      variant={
+                                        rating === value ? "default" : "outline"
+                                      }
+                                      size="sm"
+                                      onClick={() => setRating(value)}
+                                    >
+                                      {value}
+                                    </Button>
+                                  ))}
+                                </div>
+                              </div>
+                              <div className="space-y-2">
+                                <Label htmlFor="comment">Comment</Label>
+                                <Textarea
+                                  id="comment"
+                                  value={comment}
+                                  onChange={(e) =>
+                                    setComment(e.target.value)
+                                  }
+                                  placeholder="Share your experience..."
+                                />
+                              </div>
+                              <Button
+                                onClick={handleSubmitRating}
+                                className="w-full"
+                              >
+                                Submit Rating
+                              </Button>
+                            </div>
+                          </DialogContent>
+                        </Dialog>
                       )}
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            ))}
+
+                    {/* Already rated */}
+                    {booking.ratings?.length > 0 && (
+                      <div className="p-4 bg-muted rounded-lg">
+                        <div className="flex items-center gap-2 mb-2">
+                          <Star className="h-4 w-4 fill-yellow-400 text-yellow-400" />
+                          <span className="font-semibold">
+                            Your Rating: {booking.ratings[0].rating}/5
+                          </span>
+                        </div>
+                        {booking.ratings[0].comment && (
+                          <p className="text-sm text-muted-foreground">
+                            {booking.ratings[0].comment}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              );
+            })}
 
             {bookings.length === 0 && (
               <Card>

@@ -12,6 +12,8 @@ import TutorDashboard from "./pages/TutorDashboard";
 import AdminDashboard from "./pages/AdminDashboard";
 import TutorProfile from "./pages/TutorProfile";
 import NotFound from "./pages/NotFound";
+import TutorProfileEdit from "./pages/TutorProfileEdit";
+
 
 const queryClient = new QueryClient();
 
@@ -50,7 +52,15 @@ const App = () => (
             <Route path="/" element={<RootRedirect />} />
             <Route path="/login" element={<Login />} />
             <Route path="/register" element={<Register />} />
-            
+            <Route
+              path="/tutor/profile"
+              element={
+                <ProtectedRoute requiredRole="TUTOR">
+                  <TutorProfileEdit />
+                </ProtectedRoute>
+              }
+            />
+
             <Route
               path="/student/dashboard"
               element={
